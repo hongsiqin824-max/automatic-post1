@@ -1,0 +1,5 @@
+Flask>=3.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+# 只有 AI_ENABLED=1 时才需要实际安装和配置
+openai>=1.25.0

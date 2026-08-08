@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>素材分发工作台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">MATERIAL WORKFLOW</div>
+      <h1>素材分发工作台</h1>
+    </div>
+    <div class="top-actions">
+      <span id="config-status" class="config-status">配置读取中</span>
+      <button class="button primary" id="pull-btn"><span class="icon">↥</span>拉取素材</button>
+      <button class="button" id="process-btn"><span class="icon">✓</span>处理待处理</button>
+      <button class="button" id="draft-btn"><span class="icon">▣</span>创建草稿</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="metrics" id="metrics"></section>
+
+    <section class="workspace-grid">
+      <section class="panel source-panel">
+        <div class="panel-heading">
+          <div><div class="eyebrow">SOURCE / TAB</div><h2>来源与栏目</h2></div>
+          <button class="button small" id="new-source-btn">＋ 新来源</button>
+        </div>
+        <form id="source-form" class="source-form hidden">
+          <input type="hidden" id="source-original">
+          <label>source<input id="source-value" required placeholder="例如 sport_es"></label>
+          <label>显示名称<input id="source-name" placeholder="例如 每体"></label>
+          <label>后台栏目 tab ID<input id="source-tab" type="number" placeholder="未配置时留空"></label>
+          <label>栏目名称<input id="source-tab-name" placeholder="便于识别"></label>
+          <label class="checkbox"><input id="source-enabled" type="checkbox" checked>启用拉取</label>
+          <div class="form-actions"><button class="button primary" type="submit">保存配置</button><button class="button" type="button" id="cancel-source-btn">取消</button></div>
+        </form>
+        <div id="sources" class="source-list"></div>
+      </section>
+
+      <section class="panel run-panel">
+        <div class="panel-heading"><div><div class="eyebrow">RUN HISTORY</div><h2>拉取记录</h2></div><span class="muted">敏感配置不在页面展示</span></div>
+        <div id="runs" class="run-list"></div>
+      </section>
+    </section>
+
+    <section class="panel materials-panel">
+      <div class="panel-heading materials-heading">
+        <div><div class="eyebrow">MATERIAL QUEUE</div><h2>文章队列</h2></div>
+        <div class="filters">
+          <select id="filter-status"><option value="">全部状态</option></select>
+          <select id="filter-source"><option value="">全部 source</option></select>
+          <input id="filter-search" placeholder="搜索标题、URL 或 material_key">
+          <button class="button" id="refresh-btn">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>状态</th><th>标题</th><th>source / tab</th><th>channels 标签 ID</th><th>主键与时间</th><th></th></tr></thead><tbody id="materials"></tbody></table></div>
+      <div id="empty" class="empty hidden">暂无符合条件的素材</div>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-head"><div><div class="eyebrow">MATERIAL DETAIL</div><h2 id="drawer-title">素材详情</h2></div><button class="icon-button" id="close-drawer" title="关闭详情">×</button></div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
