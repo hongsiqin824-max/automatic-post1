@@ -21,6 +21,22 @@ CREATE TABLE IF NOT EXISTS sources (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS open_platform_auth (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  auth_status TEXT NOT NULL DEFAULT 'UNAUTHORIZED',
+  pending_state TEXT NOT NULL DEFAULT '',
+  pending_state_expires_at TEXT,
+  access_token TEXT NOT NULL DEFAULT '',
+  refresh_token TEXT NOT NULL DEFAULT '',
+  token_type TEXT NOT NULL DEFAULT 'Bearer',
+  token_expires_at TEXT,
+  refresh_token_expires_at TEXT,
+  authorized_user_json TEXT NOT NULL DEFAULT '{}',
+  last_authorize_url TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS materials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   material_key TEXT NOT NULL UNIQUE,
@@ -89,6 +105,13 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 def init_db(db_path: Path | str) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        current = now_iso()
+        conn.execute(
+            """INSERT OR IGNORE INTO open_platform_auth
+               (id,auth_status,pending_state,pending_state_expires_at,access_token,refresh_token,token_type,token_expires_at,refresh_token_expires_at,authorized_user_json,last_authorize_url,last_error,created_at,updated_at)
+               VALUES(1,'UNAUTHORIZED','','', '','','Bearer',NULL,NULL,'{}','','',?,?)""",
+            (current, current),
+        )
 
 
 def _json(value: Any) -> str:
@@ -116,6 +139,17 @@ def _decode_material(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 def _decode_source(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
+
+
+def _decode_open_platform_auth(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    try:
+        item["authorized_user"] = json.loads(item.pop("authorized_user_json") or "{}")
+    except json.JSONDecodeError:
+        item["authorized_user"] = {}
+    return item
 
 
 def list_sources(db_path: Path | str, enabled_only: bool = False) -> list[dict[str, Any]]:
@@ -155,6 +189,65 @@ def upsert_source(db_path: Path | str, source: str, display_name: str = "", tab_
             (source, str(display_name or "").strip(), tab_value, str(tab_name or "").strip(), int(bool(enabled)), current, current),
         )
         return _decode_source(conn.execute("SELECT * FROM sources WHERE source=?", (source,)).fetchone())
+
+
+def get_open_platform_auth(db_path: Path | str) -> dict[str, Any] | None:
+    with connect(db_path) as conn:
+        return _decode_open_platform_auth(conn.execute("SELECT * FROM open_platform_auth WHERE id=1").fetchone())
+
+
+def update_open_platform_auth(db_path: Path | str, **fields: Any) -> dict[str, Any]:
+    allowed = {
+        "auth_status",
+        "pending_state",
+        "pending_state_expires_at",
+        "access_token",
+        "refresh_token",
+        "token_type",
+        "token_expires_at",
+        "refresh_token_expires_at",
+        "authorized_user",
+        "last_authorize_url",
+        "last_error",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        current = get_open_platform_auth(db_path)
+        if current is None:
+            raise KeyError("open_platform_auth 不存在")
+        return current
+    encoded: dict[str, Any] = {}
+    for key, value in updates.items():
+        if key == "authorized_user":
+            encoded["authorized_user_json"] = _json(value or {})
+        else:
+            encoded[key] = value
+    encoded["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key}=?" for key in encoded)
+    with connect(db_path) as conn:
+        conn.execute(f"UPDATE open_platform_auth SET {assignments} WHERE id=1", [*encoded.values()])
+    current = get_open_platform_auth(db_path)
+    if current is None:
+        raise KeyError("open_platform_auth 不存在")
+    return current
+
+
+def reset_open_platform_auth(db_path: Path | str) -> dict[str, Any]:
+    current = now_iso()
+    with connect(db_path) as conn:
+        conn.execute(
+            """UPDATE open_platform_auth
+               SET auth_status='UNAUTHORIZED', pending_state='', pending_state_expires_at=NULL,
+                   access_token='', refresh_token='', token_type='Bearer', token_expires_at=NULL,
+                   refresh_token_expires_at=NULL, authorized_user_json='{}',
+                   last_authorize_url='', last_error='', updated_at=?
+               WHERE id=1""",
+            (current,),
+        )
+    current_row = get_open_platform_auth(db_path)
+    if current_row is None:
+        raise KeyError("open_platform_auth 不存在")
+    return current_row
 
 
 def create_pull_run(db_path: Path | str, sources: Iterable[str], hours: int, limit_count: int) -> int:
@@ -322,4 +415,3 @@ def recent_pull_runs(db_path: Path | str, limit: int = 20) -> list[dict[str, Any
             item["requested_sources"] = []
         result.append(item)
     return result
-

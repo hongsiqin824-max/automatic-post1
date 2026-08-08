@@ -6,7 +6,7 @@ from typing import Any
 
 from . import db
 from .config import Settings
-from .dqd_client import DqdAPIError, DqdClient
+from .dqd_client import DqdAPIError, DqdAuthError, DqdClient
 from .llm import LLMClient, LLMError
 from .material_client import MaterialAPIError, MaterialClient
 from .quality import check_and_fix_title, run_quality
@@ -116,7 +116,8 @@ def create_draft(settings: Settings, material_id: int) -> dict[str, Any]:
         raise KeyError(f"material {material_id} 不存在")
     if material["dqd_archive_id"]:
         return material
-    if material["status"] != "READY_TO_CREATE":
+    allowed_statuses = {"READY_TO_CREATE", "CREATE_ERROR", "AUTH_REQUIRED", "AUTH_EXPIRED"}
+    if material["status"] not in allowed_statuses:
         raise ValueError(f"当前状态为 {material['status_label']}，不能创建草稿")
     source_config = db.get_source(settings.db_path, material["source"])
     if not source_config or source_config.get("tab_id") is None:
@@ -125,7 +126,17 @@ def create_draft(settings: Settings, material_id: int) -> dict[str, Any]:
     db.transition(settings.db_path, material_id, "DRAFT_CREATING", event_type="DRAFT_CREATE_STARTED")
     try:
         result = DqdClient(settings).create_draft(material, source_config)
-        db.transition(settings.db_path, material_id, "DRAFT_CREATED", event_type="DRAFT_CREATE_SUCCEEDED", detail=result["payload"], dqd_archive_id=result["archive_id"], created_draft_at=now_iso(), error_message="")
+        db.transition(settings.db_path, material_id, "DRAFT_CREATED", event_type="DRAFT_CREATE_SUCCEEDED", detail=result, dqd_archive_id=result["archive_id"], created_draft_at=now_iso(), error_message="")
+    except DqdAuthError as exc:
+        next_status = "AUTH_REQUIRED" if exc.auth_status == "AUTH_REQUIRED" else "AUTH_EXPIRED"
+        db.transition(
+            settings.db_path,
+            material_id,
+            next_status,
+            event_type="OPEN_PLATFORM_AUTH_REQUIRED" if next_status == "AUTH_REQUIRED" else "OPEN_PLATFORM_AUTH_EXPIRED",
+            detail={"error": str(exc), "authorize_url": exc.authorize_url, "payload": exc.payload},
+            error_message=str(exc),
+        )
     except DqdAPIError as exc:
         db.transition(settings.db_path, material_id, "CREATE_ERROR", event_type="DRAFT_CREATE_FAILED", detail={"error": str(exc), "payload": exc.payload}, error_message=str(exc))
     return db.get_material(settings.db_path, material_id) or material
@@ -141,4 +152,3 @@ def process_pending(settings: Settings, *, limit: int = 50, create: bool = False
         except Exception as exc:
             results.append({"id": material["id"], "status": "ERROR", "error": str(exc)})
     return results
-

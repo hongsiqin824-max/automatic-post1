@@ -23,6 +23,18 @@
   <main class="shell">
     <section class="metrics" id="metrics"></section>
 
+    <section class="panel auth-panel">
+      <div class="panel-heading">
+        <div><div class="eyebrow">OPEN PLATFORM</div><h2>开放平台授权</h2></div>
+        <div class="auth-actions">
+          <button class="button small primary" id="auth-start-btn">发起授权</button>
+          <button class="button small" id="auth-refresh-btn">刷新 token</button>
+          <button class="button small danger" id="auth-reset-btn">清除授权</button>
+        </div>
+      </div>
+      <div id="auth-card" class="auth-card"></div>
+    </section>
+
     <section class="workspace-grid">
       <section class="panel source-panel">
         <div class="panel-heading">

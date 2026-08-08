@@ -1,4 +1,4 @@
-const state = { config: null, statusLabels: {}, sources: [], materials: [] };
+const state = { config: null, statusLabels: {}, sources: [], materials: [], openPlatform: {} };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -21,19 +21,34 @@ function toast(message, error = false) {
 
 function statusLabel(status) { return state.statusLabels[status] || status || '-'; }
 
+function humanSeconds(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+  const seconds = Number(value);
+  if (seconds < 0) return '已过期';
+  if (seconds < 60) return `${Math.max(0, Math.floor(seconds))} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days} 天 ${hours % 24} 小时`;
+  if (hours > 0) return `${hours} 小时 ${minutes % 60} 分`;
+  return `${minutes} 分`;
+}
+
 async function loadConfig() {
   const data = await api('/api/config');
   state.config = data;
   state.statusLabels = data.status_labels || {};
   state.sources = data.sources || [];
+  state.openPlatform = data.dqd?.auth || {};
   const key = data.material_api.key_configured;
   const dqdHeaders = data.dqd.headers_configured;
-  $('#config-status').textContent = `素材 SK ${key ? '已配置' : '未配置'} · 草稿鉴权 ${dqdHeaders ? '已配置' : '待确认'}`;
+  $('#config-status').textContent = `素材 SK ${key ? '已配置' : '未配置'} · 草稿鉴权 ${dqdHeaders ? '已配置' : '待确认'} · 开放平台 ${state.openPlatform.auth_status_label || '未授权'} · 草稿链接模板 ${data.dqd?.draft_url_template ? '已配置' : '未配置'}`;
   const statusSelect = $('#filter-status');
   statusSelect.innerHTML = '<option value="">全部状态</option>' + Object.entries(state.statusLabels).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
   const sourceSelect = $('#filter-source');
   sourceSelect.innerHTML = '<option value="">全部 source</option>' + state.sources.map((item) => `<option value="${escapeHtml(item.source)}">${escapeHtml(item.source)}</option>`).join('');
   renderSources();
+  renderAuthPanel();
 }
 
 async function loadDashboard() {
@@ -41,7 +56,7 @@ async function loadDashboard() {
   const counts = data.counts || {};
   const cards = [
     ['总素材', data.total || 0, ''], ['已接收', counts.RECEIVED || 0, 'RECEIVED'], ['待复核', counts.NEEDS_REVIEW || 0, 'NEEDS_REVIEW'],
-    ['待创建草稿', counts.READY_TO_CREATE || 0, 'READY_TO_CREATE'], ['栏目未配置', counts.TAB_UNMAPPED || 0, 'TAB_UNMAPPED'], ['草稿已创建', counts.DRAFT_CREATED || 0, 'DRAFT_CREATED'],
+    ['待创建草稿', counts.READY_TO_CREATE || 0, 'READY_TO_CREATE'], ['栏目未配置', counts.TAB_UNMAPPED || 0, 'TAB_UNMAPPED'], ['待授权', counts.AUTH_REQUIRED || 0, 'AUTH_REQUIRED'], ['授权过期', counts.AUTH_EXPIRED || 0, 'AUTH_EXPIRED'], ['草稿已创建', counts.DRAFT_CREATED || 0, 'DRAFT_CREATED'],
   ];
   $('#metrics').innerHTML = cards.map(([label, value, status]) => `<button class="metric ${status ? 'metric-button' : ''}" ${status ? `data-status="${status}"` : ''}><div class="label">${label}</div><div class="value">${value}</div><div class="label">${status ? status : '当前数据库'}</div></button>`).join('');
   document.querySelectorAll('.metric-button').forEach((node) => node.addEventListener('click', () => { $('#filter-status').value = node.dataset.status; loadMaterials(); }));
@@ -64,6 +79,31 @@ function renderRuns(runs) {
   $('#runs').innerHTML = runs.length ? runs.map((run) => `<div class="run-row"><span>${escapeHtml((run.started_at || '').replace('T', ' ').slice(0, 16))}</span><span><b>${escapeHtml((run.requested_sources || []).join(', ') || '-')}</b><span class="run-count"> 拉取 ${run.fetched_count} · 新增 ${run.inserted_count} · 更新 ${run.updated_count}</span></span><span class="status-pill ${run.status === 'FAILED' ? 'status-REJECTED' : ''}">${escapeHtml(run.status)}</span></div>`).join('') : '<div class="empty">暂无拉取记录</div>';
 }
 
+function renderAuthPanel() {
+  const auth = state.openPlatform || {};
+  const configured = state.config?.dqd?.appid_configured && state.config?.dqd?.appsecret_configured;
+  const user = auth.authorized_user || {};
+  const statusClass = auth.auth_status ? `status-${escapeHtml(auth.auth_status)}` : 'status-UNAUTHORIZED';
+  const lastError = auth.last_error ? `<div class="auth-item" style="grid-column:1 / -1"><div class="label">最近错误</div><div class="value">${escapeHtml(auth.last_error)}</div></div>` : '';
+  $('#auth-card').innerHTML = `
+    <div class="auth-status-row">
+      <span class="status-pill ${statusClass}">${escapeHtml(auth.auth_status_label || '未授权')}</span>
+      <span class="muted">${configured ? 'AppID / AppSecret 已配置' : 'AppID / AppSecret 未配置'}</span>
+      <span class="muted">回调：${escapeHtml(state.config?.dqd?.redirect_uri || '-')}</span>
+    </div>
+    <div class="auth-grid">
+      <div class="auth-item"><div class="label">Access Token</div><div class="value">${auth.has_access_token ? '已保存' : '未保存'}</div></div>
+      <div class="auth-item"><div class="label">Access 到期</div><div class="value">${humanSeconds(auth.expires_in_seconds)}</div></div>
+      <div class="auth-item"><div class="label">Refresh Token</div><div class="value">${auth.has_refresh_token ? '已保存' : '未保存'}</div></div>
+      <div class="auth-item"><div class="label">Refresh 到期</div><div class="value">${humanSeconds(auth.refresh_expires_in_seconds)}</div></div>
+      <div class="auth-item"><div class="label">授权用户</div><div class="value">${escapeHtml(user.username || user.user_name || user.user_id || '-')}</div></div>
+      <div class="auth-item"><div class="label">用户 ID</div><div class="value">${escapeHtml(user.user_id || '-')}</div></div>
+      <div class="auth-item"><div class="label">pending state</div><div class="value">${escapeHtml(auth.pending_state || '-')}</div></div>
+      <div class="auth-item"><div class="label">上次授权 URL</div><div class="value">${escapeHtml(auth.last_authorize_url || '-')}</div></div>
+      ${lastError}
+    </div>`;
+}
+
 async function loadMaterials() {
   const params = new URLSearchParams({ status: $('#filter-status').value, source: $('#filter-source').value, search: $('#filter-search').value, limit: '100' });
   const data = await api(`/api/materials?${params}`);
@@ -75,7 +115,7 @@ async function loadMaterials() {
     <td class="source-cell"><strong>${escapeHtml(item.source)}</strong><small>tab: ${state.sources.find((source) => source.source === item.source)?.tab_id ?? '未配置'}</small></td>
     <td class="channels">${item.channels?.length ? escapeHtml(item.channels.join(', ')) : '<span class="muted">无标签</span>'}</td>
     <td><span class="key">${escapeHtml(item.material_key)}</span><small class="url">更新 ${escapeHtml((item.updated_at || '').replace('T', ' ').slice(0, 16))}</small></td>
-    <td><div class="row-actions"><button class="button detail" data-id="${item.id}">详情</button>${['RECEIVED','CREATE_ERROR','TAB_UNMAPPED'].includes(item.status) ? `<button class="button process" data-id="${item.id}">处理</button>` : ''}${item.status === 'READY_TO_CREATE' ? `<button class="button primary draft" data-id="${item.id}">建草稿</button>` : ''}</div></td>
+    <td><div class="row-actions"><button class="button detail" data-id="${item.id}">详情</button>${item.draft_url ? `<a class="button small primary" href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">草稿</a>` : ''}${['RECEIVED','CREATE_ERROR','TAB_UNMAPPED'].includes(item.status) ? `<button class="button process" data-id="${item.id}">处理</button>` : ''}${['READY_TO_CREATE','CREATE_ERROR','AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? `<button class="button primary draft" data-id="${item.id}">${['AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? '重试创建' : '建草稿'}</button>` : ''}</div></td>
   </tr>`).join('');
   document.querySelectorAll('.detail').forEach((button) => button.addEventListener('click', () => openDetail(button.dataset.id)));
   document.querySelectorAll('.process').forEach((button) => button.addEventListener('click', () => processOne(button.dataset.id, false)));
@@ -120,7 +160,9 @@ async function openDetail(id) {
     $('#drawer-title').textContent = item.title_final || item.title_original || '素材详情';
     const quality = JSON.stringify(item.quality || {}, null, 2);
     const titleCheck = JSON.stringify(item.title_check || {}, null, 2);
-    $('#drawer-body').innerHTML = `<div class="detail-block"><h3>状态</h3><div class="detail-grid"><dt>当前状态</dt><dd><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span></dd><dt>等级</dt><dd>B（系统固定）</dd><dt>source</dt><dd>${escapeHtml(item.source)}</dd><dt>后台栏目</dt><dd>${item.source_config?.tab_id ?? '未配置'} ${escapeHtml(item.source_config?.tab_name || '')}</dd><dt>上游 archive_id</dt><dd>${item.upstream_archive_id || 0}</dd><dt>草稿 archive_id</dt><dd>${item.dqd_archive_id || '尚未创建'}</dd></div></div>
+    const draftUrlNode = item.draft_url ? `<a href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.draft_url)}</a>` : '<span class="muted">尚未创建</span>';
+    const draftIdNode = item.dqd_archive_id ? (item.draft_url ? `<a href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">${item.dqd_archive_id}</a>` : String(item.dqd_archive_id)) : '尚未创建';
+    $('#drawer-body').innerHTML = `<div class="detail-block"><h3>状态</h3><div class="detail-grid"><dt>当前状态</dt><dd><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span></dd><dt>等级</dt><dd>B（系统固定）</dd><dt>source</dt><dd>${escapeHtml(item.source)}</dd><dt>后台栏目</dt><dd>${item.source_config?.tab_id ?? '未配置'} ${escapeHtml(item.source_config?.tab_name || '')}</dd><dt>上游 archive_id</dt><dd>${item.upstream_archive_id || 0}</dd><dt>草稿 archive_id</dt><dd>${draftIdNode}</dd><dt>草稿链接</dt><dd>${draftUrlNode}</dd></div></div>
       <div class="detail-block"><h3>主键与来源</h3><div class="detail-grid"><dt>material_key</dt><dd>${escapeHtml(item.material_key)}</dd><dt>规范化 URL</dt><dd>${escapeHtml(item.canonical_url)}</dd><dt>source_url</dt><dd><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source_url)}</a></dd></div></div>
       <div class="detail-block"><h3>标签 ID</h3><div class="json">${escapeHtml(JSON.stringify(item.channels || []))}</div></div>
       <div class="detail-block"><h3>质量检测</h3><div class="json">${escapeHtml(quality)}</div></div>
@@ -131,6 +173,27 @@ async function openDetail(id) {
   } catch (error) { toast(error.message, true); }
 }
 
+async function startAuthorization() {
+  try {
+    const result = await api('/api/open/auth/start', { method: 'POST', body: JSON.stringify({}) });
+    await refresh();
+    toast('已打开开放平台授权页');
+    const opened = window.open(result.authorize_url, '_blank', 'noopener');
+    if (!opened) window.location.href = result.authorize_url;
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function refreshAuthorization() {
+  await runAction('/api/open/auth/refresh', {}, '开放平台 token 已刷新');
+}
+
+async function resetAuthorization() {
+  if (!window.confirm('确定清除当前开放平台授权吗？')) return;
+  await runAction('/api/open/auth/reset', {}, '开放平台授权已清除');
+}
+
 async function refresh() { await Promise.all([loadConfig(), loadDashboard(), loadMaterials()]); }
 
 $('#new-source-btn').addEventListener('click', () => { resetSourceForm(); $('#source-form').classList.remove('hidden'); $('#source-value').focus(); });
@@ -138,6 +201,9 @@ $('#cancel-source-btn').addEventListener('click', resetSourceForm);
 $('#source-form').addEventListener('submit', saveSource);
 $('#close-drawer').addEventListener('click', () => { $('#drawer').classList.add('hidden'); $('#drawer').setAttribute('aria-hidden', 'true'); });
 $('#refresh-btn').addEventListener('click', () => refresh().catch((error) => toast(error.message, true)));
+$('#auth-start-btn').addEventListener('click', startAuthorization);
+$('#auth-refresh-btn').addEventListener('click', refreshAuthorization);
+$('#auth-reset-btn').addEventListener('click', resetAuthorization);
 $('#filter-status').addEventListener('change', () => loadMaterials().catch((error) => toast(error.message, true)));
 $('#filter-source').addEventListener('change', () => loadMaterials().catch((error) => toast(error.message, true)));
 let searchTimer; $('#filter-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadMaterials().catch((error) => toast(error.message, true)), 250); });

@@ -10,9 +10,10 @@ STATUS_LABELS = {
     "DRAFT_CREATING": "创建草稿中",
     "DRAFT_CREATED": "草稿已创建",
     "ALREADY_HAS_ARCHIVE": "上游已有文章",
+    "AUTH_REQUIRED": "开放平台待授权",
+    "AUTH_EXPIRED": "开放平台授权过期",
     "CREATE_ERROR": "创建失败",
     "REJECTED": "质检拒绝",
 }
 
 TERMINAL_STATUSES = {"DRAFT_CREATED", "ALREADY_HAS_ARCHIVE", "REJECTED"}
-

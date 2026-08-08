@@ -15,6 +15,7 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DQD_DRAFT_URL_TEMPLATE = "https://dadmin.dongqiudi.com/admin/archives/articlePublish?articleId={archive_id}"
 
 
 def _load_dotenv() -> None:
@@ -85,6 +86,9 @@ class Settings:
     material_api_limit: int
     material_api_sources: tuple[str, ...]
     dqd_open_api_url: str
+    dqd_open_appid: str
+    dqd_open_appsecret: str
+    dqd_open_redirect_uri: str
     dqd_enname: str
     dqd_archive_level: str
     dqd_status: int
@@ -100,6 +104,7 @@ class Settings:
     app_host: str
     app_port: int
     app_debug: bool
+    dqd_draft_url_template: str = DEFAULT_DQD_DRAFT_URL_TEMPLATE
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -126,6 +131,12 @@ class Settings:
                 "DQD_OPEN_API_URL",
                 "https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
             ).strip(),
+            dqd_open_appid=os.getenv("DQD_OPEN_APPID", "").strip(),
+            dqd_open_appsecret=os.getenv("DQD_OPEN_APPSECRET", "").strip(),
+            dqd_open_redirect_uri=os.getenv(
+                "DQD_OPEN_REDIRECT_URI",
+                "http://127.0.0.1:8900/api/open/auth/callback",
+            ).strip(),
             dqd_enname=os.getenv("DQD_ENNAME", "hongsiqin").strip(),
             dqd_archive_level=level,
             dqd_status=_int("DQD_CREATE_STATUS", 0),
@@ -139,11 +150,11 @@ class Settings:
             llm_request_retries=_int("LLM_REQUEST_RETRIES", 2),
             pull_auto_process=_bool("PULL_AUTO_PROCESS", False),
             app_host=os.getenv("APP_HOST", "127.0.0.1"),
-            app_port=_int("APP_PORT", 8899),
+            app_port=_int("APP_PORT", 8900),
             app_debug=_bool("APP_DEBUG", False),
+            dqd_draft_url_template=os.getenv("DQD_DRAFT_URL_TEMPLATE", DEFAULT_DQD_DRAFT_URL_TEMPLATE).strip(),
         )
 
 
 def get_settings() -> Settings:
     return Settings.from_env()
-

@@ -1,10 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+from types import SimpleNamespace
 
 from app import db
 from app.config import Settings
-from app.dqd_client import build_create_form
+from app.dqd_client import DqdClient, build_create_form, build_draft_url
+from app.open_platform import build_authorize_url, build_signed_request_url, sign_query_params
 from app.utils import canonicalize_url, clean_channels, material_key
 
 
@@ -25,7 +28,9 @@ class CoreTests(unittest.TestCase):
         settings = Settings(
             db_path=Path("/tmp/material-test.db"), material_api_base_url="", material_api_key="", material_api_caller="",
             material_api_timeout_seconds=1, material_api_hours=6, material_api_limit=100, material_api_sources=(),
-            dqd_open_api_url="", dqd_enname="hongsiqin", dqd_archive_level="B", dqd_status=0, dqd_timeout_seconds=1, dqd_headers={},
+            dqd_open_api_url="https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
+            dqd_open_appid="app-id", dqd_open_appsecret="secret", dqd_open_redirect_uri="http://127.0.0.1:8900/api/open/auth/callback",
+            dqd_enname="hongsiqin", dqd_archive_level="B", dqd_status=0, dqd_timeout_seconds=1, dqd_headers={},
             ai_enabled=False, llm_api_key="", llm_base_url="", llm_model="", llm_timeout_seconds=1, llm_request_retries=1,
             pull_auto_process=False, app_host="", app_port=1, app_debug=False,
         )
@@ -35,6 +40,83 @@ class CoreTests(unittest.TestCase):
         self.assertIn(("status", "0"), form)
         self.assertIn(("tabs[]", "99"), form)
         self.assertIn(("channels", "11,22"), form)
+
+    def test_build_draft_url_uses_configured_template(self):
+        settings = Settings(
+            db_path=Path("/tmp/material-test.db"), material_api_base_url="", material_api_key="", material_api_caller="",
+            material_api_timeout_seconds=1, material_api_hours=6, material_api_limit=100, material_api_sources=(),
+            dqd_open_api_url="https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
+            dqd_open_appid="app-id", dqd_open_appsecret="secret", dqd_open_redirect_uri="http://127.0.0.1:8900/api/open/auth/callback",
+            dqd_enname="hongsiqin", dqd_archive_level="B", dqd_status=0, dqd_timeout_seconds=1, dqd_headers={},
+            ai_enabled=False, llm_api_key="", llm_base_url="", llm_model="", llm_timeout_seconds=1, llm_request_retries=1,
+            pull_auto_process=False, app_host="", app_port=1, app_debug=False,
+            dqd_draft_url_template="https://dadmin.dongqiudi.com/admin/archives/articlePublish?articleId={archive_id}",
+        )
+        self.assertEqual(build_draft_url(settings, 6141262), "https://dadmin.dongqiudi.com/admin/archives/articlePublish?articleId=6141262")
+
+    def test_create_draft_accepts_nested_archive_id_response(self):
+        settings = Settings(
+            db_path=Path("/tmp/material-test.db"), material_api_base_url="", material_api_key="", material_api_caller="",
+            material_api_timeout_seconds=1, material_api_hours=6, material_api_limit=100, material_api_sources=(),
+            dqd_open_api_url="https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
+            dqd_open_appid="app-id", dqd_open_appsecret="secret", dqd_open_redirect_uri="http://127.0.0.1:8900/api/open/auth/callback",
+            dqd_enname="hongsiqin", dqd_archive_level="B", dqd_status=0, dqd_timeout_seconds=1, dqd_headers={},
+            ai_enabled=False, llm_api_key="", llm_base_url="", llm_model="", llm_timeout_seconds=1, llm_request_retries=1,
+            pull_auto_process=False, app_host="", app_port=1, app_debug=False,
+        )
+        client = DqdClient(settings)
+        client.open_platform = SimpleNamespace(
+            post_signed=lambda **kwargs: (
+                SimpleNamespace(status_code=200),
+                {
+                    "code": 0,
+                    "data": {
+                        "code": 0,
+                        "data": {
+                            "archive_id": 6141262,
+                            "result": {"archive_id": 6141262, "message": "", "success": True},
+                        },
+                        "message": "ok",
+                    },
+                },
+                "https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
+            )
+        )
+
+        result = client.create_draft(
+            {"title_final": "测试标题", "body_html": "<p>正文</p>", "channels": [11], "litpic": ""},
+            {"tab_id": 99},
+        )
+        self.assertEqual(result["archive_id"], 6141262)
+        self.assertTrue(result["draft_url"].endswith("articleId=6141262"))
+
+    def test_open_platform_sign_and_authorize_url_are_structured(self):
+        settings = Settings(
+            db_path=Path("/tmp/material-test.db"), material_api_base_url="", material_api_key="", material_api_caller="",
+            material_api_timeout_seconds=1, material_api_hours=6, material_api_limit=100, material_api_sources=(),
+            dqd_open_api_url="https://platform.dongqiudi.com/open/v1/do?api_name=admin-archive-createarticle",
+            dqd_open_appid="app-id", dqd_open_appsecret="secret", dqd_open_redirect_uri="http://127.0.0.1:8900/api/open/auth/callback",
+            dqd_enname="hongsiqin", dqd_archive_level="B", dqd_status=0, dqd_timeout_seconds=1, dqd_headers={},
+            ai_enabled=False, llm_api_key="", llm_base_url="", llm_model="", llm_timeout_seconds=1, llm_request_retries=1,
+            pull_auto_process=False, app_host="", app_port=1, app_debug=False,
+        )
+        authorize_url, state = build_authorize_url(settings, state="state123")
+        parsed = urlsplit(authorize_url)
+        params = parse_qs(parsed.query)
+        self.assertEqual(state, "state123")
+        self.assertEqual(params["appid"][0], "app-id")
+        self.assertEqual(params["api_name"][0], "admin-archive-createarticle")
+        self.assertEqual(params["redirect_uri"][0], "http://127.0.0.1:8900/api/open/auth/callback")
+        self.assertEqual(params["state"][0], "state123")
+
+        signed_url = build_signed_request_url(settings)
+        signed_params = parse_qs(urlsplit(signed_url).query)
+        self.assertEqual(signed_params["appid"][0], "app-id")
+        self.assertEqual(signed_params["api_name"][0], "admin-archive-createarticle")
+        self.assertIn("timestamp", signed_params)
+        self.assertIn("nonce", signed_params)
+        self.assertIn("sign", signed_params)
+        self.assertEqual(len(sign_query_params([("api_name", "admin-archive-createarticle"), ("appid", "app-id"), ("timestamp", "1"), ("nonce", "abc")], "secret")), 64)
 
     def test_material_events_preserve_status_history(self):
         with tempfile.TemporaryDirectory() as directory:
