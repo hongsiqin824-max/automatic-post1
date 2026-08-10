@@ -75,7 +75,8 @@ input, select { width: 100%; min-width: 0; border: 1px solid var(--line); border
 .run-row .run-count { color: var(--muted); font-size: 11px; }
 .status-pill { display: inline-flex; align-items: center; white-space: nowrap; border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 700; background: #eef1f3; color: #55616c; }
 .status-READY_TO_CREATE, .status-DRAFT_CREATED { color: var(--accent); background: var(--accent-soft); }
-.status-TAB_UNMAPPED, .status-NEEDS_REVIEW, .status-CREATE_ERROR { color: var(--warning); background: var(--warning-soft); }
+.status-TAB_UNMAPPED, .status-NEEDS_REVIEW, .status-CREATE_ERROR, .status-AUTH_REQUIRED, .status-AUTH_EXPIRED { color: var(--warning); background: var(--warning-soft); }
+.status-ALREADY_HAS_ARCHIVE { color: var(--blue); background: var(--blue-soft); }
 .status-REJECTED { color: var(--danger); background: var(--danger-soft); }
 .status-QUALITY_CHECKING, .status-TITLE_CHECKING, .status-DRAFT_CREATING { color: var(--blue); background: var(--blue-soft); }
 .materials-panel { overflow: hidden; }
@@ -93,6 +94,8 @@ tr:hover td { background: #fbfdfd; }
 .source-cell strong { display: block; }
 .source-cell small { color: var(--muted); }
 .channels { max-width: 180px; color: #3e5969; line-height: 1.6; overflow-wrap: anywhere; }
+.status-stack { display: flex; flex-direction: column; gap: 4px; }
+.stage-hint { color: var(--muted); font-size: 10px; line-height: 1.45; white-space: normal; }
 .row-actions { display: flex; gap: 5px; justify-content: flex-end; white-space: nowrap; flex-wrap: wrap; }
 .row-actions .button { padding: 5px 7px; font-size: 11px; }
 .empty { padding: 36px; text-align: center; color: var(--muted); }
@@ -105,6 +108,7 @@ tr:hover td { background: #fbfdfd; }
 .detail-grid dt { color: var(--muted); }
 .detail-grid dd { margin: 0; overflow-wrap: anywhere; }
 .body-preview { background: #f8fafb; border: 1px solid var(--line); padding: 12px; max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.65; }
+.auth-note { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .timeline { border-left: 2px solid #dbe8e6; padding-left: 15px; }
 .event { position: relative; margin: 0 0 15px; font-size: 12px; }
 .event::before { content: ""; position: absolute; left: -21px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }

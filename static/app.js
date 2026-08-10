@@ -2,6 +2,20 @@ const state = { config: null, statusLabels: {}, sources: [], materials: [], open
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+const setBusy = (ids, busy) => {
+  for (const id of ids) {
+    const node = document.getElementById(id);
+    if (node) node.disabled = busy;
+  }
+};
+async function withBusy(ids, fn) {
+  setBusy(ids, true);
+  try {
+    return await fn();
+  } finally {
+    setBusy(ids, false);
+  }
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
@@ -20,6 +34,25 @@ function toast(message, error = false) {
 }
 
 function statusLabel(status) { return state.statusLabels[status] || status || '-'; }
+
+function workflowHint(status) {
+  const hints = {
+    RECEIVED: '已接收，等待质检',
+    QUALITY_CHECKING: '质检中',
+    TITLE_CHECKING: '质检通过，标题检查中',
+    NEEDS_REVIEW: '需要人工复核',
+    TAB_UNMAPPED: '质检/标题已过，等待栏目映射',
+    READY_TO_CREATE: '栏目已匹配，可以创建草稿',
+    DRAFT_CREATING: '正在创建草稿',
+    DRAFT_CREATED: '草稿已创建',
+    ALREADY_HAS_ARCHIVE: '上游已有文章',
+    AUTH_REQUIRED: '需要重新授权',
+    AUTH_EXPIRED: '授权已过期',
+    CREATE_ERROR: '创建失败，可重试',
+    REJECTED: '质检未通过',
+  };
+  return hints[status] || '状态待确认';
+}
 
 function humanSeconds(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
@@ -42,7 +75,7 @@ async function loadConfig() {
   state.openPlatform = data.dqd?.auth || {};
   const key = data.material_api.key_configured;
   const dqdHeaders = data.dqd.headers_configured;
-  $('#config-status').textContent = `素材 SK ${key ? '已配置' : '未配置'} · 草稿鉴权 ${dqdHeaders ? '已配置' : '待确认'} · 开放平台 ${state.openPlatform.auth_status_label || '未授权'} · 草稿链接模板 ${data.dqd?.draft_url_template ? '已配置' : '未配置'}`;
+  $('#config-status').textContent = `素材 SK ${key ? '已配置' : '未配置'} · 草稿鉴权 ${dqdHeaders ? '已配置' : '待确认'} · 开放平台 ${state.openPlatform.auth_status_label || '未授权'} · 拉取后自动处理 ${data.pull_auto_process ? '开启' : '关闭'} · 草稿链接模板 ${data.dqd?.draft_url_template ? '已配置' : '未配置'}`;
   const statusSelect = $('#filter-status');
   statusSelect.innerHTML = '<option value="">全部状态</option>' + Object.entries(state.statusLabels).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
   const sourceSelect = $('#filter-source');
@@ -54,10 +87,10 @@ async function loadConfig() {
 async function loadDashboard() {
   const data = await api('/api/dashboard');
   const counts = data.counts || {};
-  const cards = [
-    ['总素材', data.total || 0, ''], ['已接收', counts.RECEIVED || 0, 'RECEIVED'], ['待复核', counts.NEEDS_REVIEW || 0, 'NEEDS_REVIEW'],
-    ['待创建草稿', counts.READY_TO_CREATE || 0, 'READY_TO_CREATE'], ['栏目未配置', counts.TAB_UNMAPPED || 0, 'TAB_UNMAPPED'], ['待授权', counts.AUTH_REQUIRED || 0, 'AUTH_REQUIRED'], ['授权过期', counts.AUTH_EXPIRED || 0, 'AUTH_EXPIRED'], ['草稿已创建', counts.DRAFT_CREATED || 0, 'DRAFT_CREATED'],
-  ];
+  const cards = [['总素材', data.total || 0, '']];
+  Object.entries(state.statusLabels).forEach(([status, label]) => {
+    cards.push([label, counts[status] || 0, status]);
+  });
   $('#metrics').innerHTML = cards.map(([label, value, status]) => `<button class="metric ${status ? 'metric-button' : ''}" ${status ? `data-status="${status}"` : ''}><div class="label">${label}</div><div class="value">${value}</div><div class="label">${status ? status : '当前数据库'}</div></button>`).join('');
   document.querySelectorAll('.metric-button').forEach((node) => node.addEventListener('click', () => { $('#filter-status').value = node.dataset.status; loadMaterials(); }));
   renderRuns(data.runs || []);
@@ -91,6 +124,7 @@ function renderAuthPanel() {
       <span class="muted">${configured ? 'AppID / AppSecret 已配置' : 'AppID / AppSecret 未配置'}</span>
       <span class="muted">回调：${escapeHtml(state.config?.dqd?.redirect_uri || '-')}</span>
     </div>
+    <div class="auth-note">Access token 接近到期时会自动用 refresh token 续期；如果 refresh 失效，系统会把状态切回待授权。</div>
     <div class="auth-grid">
       <div class="auth-item"><div class="label">Access Token</div><div class="value">${auth.has_access_token ? '已保存' : '未保存'}</div></div>
       <div class="auth-item"><div class="label">Access 到期</div><div class="value">${humanSeconds(auth.expires_in_seconds)}</div></div>
@@ -110,12 +144,12 @@ async function loadMaterials() {
   state.materials = data.items || [];
   $('#empty').classList.toggle('hidden', state.materials.length > 0);
   $('#materials').innerHTML = state.materials.map((item) => `<tr>
-    <td><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span></td>
+    <td><div class="status-stack"><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span><small class="stage-hint">${escapeHtml(workflowHint(item.status))}</small></div></td>
     <td class="title-cell"><strong>${escapeHtml(item.title_final || item.title_original || '无标题')}</strong>${item.title_final && item.title_final !== item.title_original ? `<small>原题：${escapeHtml(item.title_original)}</small>` : ''}<small class="url">${escapeHtml(item.source_url)}</small></td>
     <td class="source-cell"><strong>${escapeHtml(item.source)}</strong><small>tab: ${state.sources.find((source) => source.source === item.source)?.tab_id ?? '未配置'}</small></td>
     <td class="channels">${item.channels?.length ? escapeHtml(item.channels.join(', ')) : '<span class="muted">无标签</span>'}</td>
     <td><span class="key">${escapeHtml(item.material_key)}</span><small class="url">更新 ${escapeHtml((item.updated_at || '').replace('T', ' ').slice(0, 16))}</small></td>
-    <td><div class="row-actions"><button class="button detail" data-id="${item.id}">详情</button>${item.draft_url ? `<a class="button small primary" href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">草稿</a>` : ''}${['RECEIVED','CREATE_ERROR','TAB_UNMAPPED'].includes(item.status) ? `<button class="button process" data-id="${item.id}">处理</button>` : ''}${['READY_TO_CREATE','CREATE_ERROR','AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? `<button class="button primary draft" data-id="${item.id}">${['AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? '重试创建' : '建草稿'}</button>` : ''}</div></td>
+    <td><div class="row-actions"><button class="button detail" data-id="${item.id}">详情</button>${item.draft_url ? `<a class="button small primary" href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">打开草稿</a>` : ''}${['RECEIVED','CREATE_ERROR','TAB_UNMAPPED'].includes(item.status) ? `<button class="button process" data-id="${item.id}">重新处理</button>` : ''}${['READY_TO_CREATE','CREATE_ERROR','AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? `<button class="button primary draft" data-id="${item.id}">${['AUTH_REQUIRED','AUTH_EXPIRED'].includes(item.status) ? '重试创建' : '创建草稿'}</button>` : ''}</div></td>
   </tr>`).join('');
   document.querySelectorAll('.detail').forEach((button) => button.addEventListener('click', () => openDetail(button.dataset.id)));
   document.querySelectorAll('.process').forEach((button) => button.addEventListener('click', () => processOne(button.dataset.id, false)));
@@ -148,8 +182,17 @@ async function saveSource(event) {
   } catch (error) { toast(error.message, true); }
 }
 
-async function runAction(path, body, success) {
-  try { const result = await api(path, { method: 'POST', body: JSON.stringify(body || {}) }); await refresh(); toast(success); return result; } catch (error) { toast(error.message, true); }
+async function runAction(path, body, success, buttonIds = []) {
+  try {
+    return await withBusy(buttonIds, async () => {
+      const result = await api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+      await refresh();
+      toast(success);
+      return result;
+    });
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 async function processOne(id, create) { await runAction(`/api/materials/${id}/process`, { create }, create ? '处理并创建草稿完成' : '素材处理完成'); }
 async function createOne(id) { await runAction(`/api/materials/${id}/create-draft`, {}, '草稿创建请求已完成'); }
@@ -162,12 +205,13 @@ async function openDetail(id) {
     const titleCheck = JSON.stringify(item.title_check || {}, null, 2);
     const draftUrlNode = item.draft_url ? `<a href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.draft_url)}</a>` : '<span class="muted">尚未创建</span>';
     const draftIdNode = item.dqd_archive_id ? (item.draft_url ? `<a href="${escapeHtml(item.draft_url)}" target="_blank" rel="noreferrer">${item.dqd_archive_id}</a>` : String(item.dqd_archive_id)) : '尚未创建';
-    $('#drawer-body').innerHTML = `<div class="detail-block"><h3>状态</h3><div class="detail-grid"><dt>当前状态</dt><dd><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span></dd><dt>等级</dt><dd>B（系统固定）</dd><dt>source</dt><dd>${escapeHtml(item.source)}</dd><dt>后台栏目</dt><dd>${item.source_config?.tab_id ?? '未配置'} ${escapeHtml(item.source_config?.tab_name || '')}</dd><dt>上游 archive_id</dt><dd>${item.upstream_archive_id || 0}</dd><dt>草稿 archive_id</dt><dd>${draftIdNode}</dd><dt>草稿链接</dt><dd>${draftUrlNode}</dd></div></div>
+    const bodyPreview = item.body_html ? escapeHtml(item.body_html) : '<span class="muted">正文为空</span>';
+    $('#drawer-body').innerHTML = `<div class="detail-block"><h3>状态</h3><div class="detail-grid"><dt>当前状态</dt><dd><span class="status-pill status-${escapeHtml(item.status)}">${escapeHtml(item.status_label)}</span></dd><dt>当前阶段</dt><dd>${escapeHtml(workflowHint(item.status))}</dd><dt>等级</dt><dd>B（系统固定）</dd><dt>source</dt><dd>${escapeHtml(item.source)}</dd><dt>后台栏目</dt><dd>${item.source_config?.tab_id ?? '未配置'} ${escapeHtml(item.source_config?.tab_name || '')}</dd><dt>上游 archive_id</dt><dd>${item.upstream_archive_id || 0}</dd><dt>草稿 archive_id</dt><dd>${draftIdNode}</dd><dt>草稿链接</dt><dd>${draftUrlNode}</dd></div></div>
       <div class="detail-block"><h3>主键与来源</h3><div class="detail-grid"><dt>material_key</dt><dd>${escapeHtml(item.material_key)}</dd><dt>规范化 URL</dt><dd>${escapeHtml(item.canonical_url)}</dd><dt>source_url</dt><dd><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source_url)}</a></dd></div></div>
       <div class="detail-block"><h3>标签 ID</h3><div class="json">${escapeHtml(JSON.stringify(item.channels || []))}</div></div>
       <div class="detail-block"><h3>质量检测</h3><div class="json">${escapeHtml(quality)}</div></div>
       <div class="detail-block"><h3>标题检查</h3><div class="json">${escapeHtml(titleCheck)}</div></div>
-      <div class="detail-block"><h3>正文</h3><div class="body-preview">${item.body_html || '<span class="muted">正文为空</span>'}</div></div>
+      <div class="detail-block"><h3>正文</h3><div class="body-preview">${bodyPreview}</div></div>
       <div class="detail-block"><h3>状态时间线</h3><div class="timeline">${(item.events || []).map((event) => `<div class="event"><b>${escapeHtml(event.to_status_label)}</b><span> · ${escapeHtml(event.event_type)}</span><time>${escapeHtml(event.created_at)}</time>${Object.keys(event.detail || {}).length ? `<div class="json">${escapeHtml(JSON.stringify(event.detail, null, 2))}</div>` : ''}</div>`).join('')}</div></div>`;
     $('#drawer').classList.remove('hidden'); $('#drawer').setAttribute('aria-hidden', 'false');
   } catch (error) { toast(error.message, true); }
@@ -175,8 +219,11 @@ async function openDetail(id) {
 
 async function startAuthorization() {
   try {
-    const result = await api('/api/open/auth/start', { method: 'POST', body: JSON.stringify({}) });
-    await refresh();
+    const result = await withBusy(['auth-start-btn'], async () => {
+      const response = await api('/api/open/auth/start', { method: 'POST', body: JSON.stringify({}) });
+      await refresh();
+      return response;
+    });
     toast('已打开开放平台授权页');
     const opened = window.open(result.authorize_url, '_blank', 'noopener');
     if (!opened) window.location.href = result.authorize_url;
@@ -186,15 +233,18 @@ async function startAuthorization() {
 }
 
 async function refreshAuthorization() {
-  await runAction('/api/open/auth/refresh', {}, '开放平台 token 已刷新');
+  await runAction('/api/open/auth/refresh', {}, '开放平台 token 已刷新', ['auth-refresh-btn']);
 }
 
 async function resetAuthorization() {
   if (!window.confirm('确定清除当前开放平台授权吗？')) return;
-  await runAction('/api/open/auth/reset', {}, '开放平台授权已清除');
+  await runAction('/api/open/auth/reset', {}, '开放平台授权已清除', ['auth-reset-btn']);
 }
 
-async function refresh() { await Promise.all([loadConfig(), loadDashboard(), loadMaterials()]); }
+async function refresh() {
+  await loadConfig();
+  await Promise.all([loadDashboard(), loadMaterials()]);
+}
 
 $('#new-source-btn').addEventListener('click', () => { resetSourceForm(); $('#source-form').classList.remove('hidden'); $('#source-value').focus(); });
 $('#cancel-source-btn').addEventListener('click', resetSourceForm);
@@ -207,8 +257,9 @@ $('#auth-reset-btn').addEventListener('click', resetAuthorization);
 $('#filter-status').addEventListener('change', () => loadMaterials().catch((error) => toast(error.message, true)));
 $('#filter-source').addEventListener('change', () => loadMaterials().catch((error) => toast(error.message, true)));
 let searchTimer; $('#filter-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadMaterials().catch((error) => toast(error.message, true)), 250); });
-$('#pull-btn').addEventListener('click', async () => { const hours = window.prompt('拉取最近几小时？', 6); if (hours === null) return; await runAction('/api/pull', { hours: Number(hours), limit: 100, process: false }, '素材拉取完成'); });
-$('#process-btn').addEventListener('click', () => runAction('/api/process', { limit: 50, create: false }, '待处理素材已完成检查'));
-$('#draft-btn').addEventListener('click', () => runAction('/api/process', { limit: 50, create: true }, '待处理素材已尝试创建草稿'));
+$('#pull-btn').addEventListener('click', async () => { const hours = window.prompt('拉取最近几小时？', 6); if (hours === null) return; await runAction('/api/pull', { hours: Number(hours), limit: 100, process: false }, '仅拉取完成', ['pull-btn']); });
+$('#pull-create-btn').addEventListener('click', async () => { const hours = window.prompt('拉取最近几小时并创建草稿？', 6); if (hours === null) return; await runAction('/api/pull', { hours: Number(hours), limit: 100, process: true, create: true }, '素材已拉取，并已进入自动处理/创建草稿流程', ['pull-create-btn']); });
+$('#process-btn').addEventListener('click', () => runAction('/api/process', { limit: 50, create: false }, '待处理素材已完成检查', ['process-btn']));
+$('#draft-btn').addEventListener('click', () => runAction('/api/process', { limit: 50, create: true }, '批量创建草稿已完成', ['draft-btn']));
 window.setInterval(() => refresh().catch(() => {}), 15000);
 refresh().catch((error) => toast(error.message, true));

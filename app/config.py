@@ -112,7 +112,8 @@ class Settings:
         db_path = Path(db_raw)
         if not db_path.is_absolute():
             db_path = PROJECT_ROOT / db_path
-        level = os.getenv("DQD_ARCHIVE_LEVEL", "B").strip().upper() or "B"
+        dqd_enname = (os.getenv("DQD_ENNAME") or os.getenv("DQD_OPEN_ENNAME") or "hongsiqin").strip()
+        level = (os.getenv("DQD_ARCHIVE_LEVEL") or os.getenv("DQD_OPEN_ARCHIVE_LEVEL") or "B").strip().upper() or "B"
         if level not in {"S", "A", "B", "C"}:
             raise ValueError("DQD_ARCHIVE_LEVEL 必须是 S、A、B 或 C")
         return cls(
@@ -137,7 +138,7 @@ class Settings:
                 "DQD_OPEN_REDIRECT_URI",
                 "http://127.0.0.1:8900/api/open/auth/callback",
             ).strip(),
-            dqd_enname=os.getenv("DQD_ENNAME", "hongsiqin").strip(),
+            dqd_enname=dqd_enname,
             dqd_archive_level=level,
             dqd_status=_int("DQD_CREATE_STATUS", 0),
             dqd_timeout_seconds=_float("DQD_CREATE_TIMEOUT_SECONDS", 30.0),

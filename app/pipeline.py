@@ -10,6 +10,7 @@ from .dqd_client import DqdAPIError, DqdAuthError, DqdClient
 from .llm import LLMClient, LLMError
 from .material_client import MaterialAPIError, MaterialClient
 from .quality import check_and_fix_title, run_quality
+from .status import TERMINAL_STATUSES
 from .utils import canonicalize_url, clean_channels, material_key, now_iso
 
 
@@ -52,6 +53,7 @@ def pull_materials(settings: Settings, sources: list[str] | None = None, *, hour
     client = MaterialClient(settings)
     run_id = db.create_pull_run(settings.db_path, source_values, hours or settings.material_api_hours, limit or settings.material_api_limit)
     fetched = inserted = updated = 0
+    material_ids: list[int] = []
     errors: list[str] = []
     try:
         for source in source_values:
@@ -67,7 +69,9 @@ def pull_materials(settings: Settings, sources: list[str] | None = None, *, hour
                         normalised["source"] = source
                     if not normalised["source_url"]:
                         continue
-                    _, was_inserted = db.upsert_material(settings.db_path, normalised)
+                    material_id, was_inserted = db.upsert_material(settings.db_path, normalised)
+                    if material_id not in material_ids:
+                        material_ids.append(material_id)
                     inserted += int(was_inserted)
                     updated += int(not was_inserted)
             except MaterialAPIError as exc:
@@ -77,7 +81,43 @@ def pull_materials(settings: Settings, sources: list[str] | None = None, *, hour
     except Exception as exc:
         db.finish_pull_run(settings.db_path, run_id, fetched=fetched, inserted=inserted, updated=updated, error_message=str(exc), status="FAILED")
         raise
-    return {"run_id": run_id, "sources": source_values, "fetched": fetched, "inserted": inserted, "updated": updated, "errors": errors}
+    return {"run_id": run_id, "sources": source_values, "fetched": fetched, "inserted": inserted, "updated": updated, "material_ids": material_ids, "errors": errors}
+
+
+def _process_material_record(settings: Settings, material: dict[str, Any], *, create: bool) -> dict[str, Any]:
+    status = str(material.get("status") or "")
+    if status in TERMINAL_STATUSES:
+        return material
+    if create:
+        if status in {"READY_TO_CREATE", "TAB_UNMAPPED", "CREATE_ERROR", "AUTH_REQUIRED", "AUTH_EXPIRED"}:
+            return create_draft(settings, int(material["id"]))
+        return process_material(settings, int(material["id"]), create=True)
+    if status in {"RECEIVED", "CREATE_ERROR", "TAB_UNMAPPED"}:
+        return process_material(settings, int(material["id"]), create=False)
+    return material
+
+
+def process_material_ids(settings: Settings, material_ids: list[int], *, create: bool = False) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for raw_id in material_ids:
+        try:
+            material_id = int(raw_id)
+        except (TypeError, ValueError):
+            results.append({"id": raw_id, "status": "ERROR", "error": f"无效的 material id: {raw_id}"})
+            continue
+        if material_id in seen:
+            continue
+        seen.add(material_id)
+        material = db.get_material(settings.db_path, material_id)
+        if material is None:
+            results.append({"id": material_id, "status": "ERROR", "error": f"material {material_id} 不存在"})
+            continue
+        try:
+            results.append(_process_material_record(settings, material, create=create))
+        except Exception as exc:
+            results.append({"id": material_id, "status": "ERROR", "error": str(exc)})
+    return results
 
 
 def process_material(settings: Settings, material_id: int, *, create: bool = False) -> dict[str, Any]:
@@ -116,7 +156,7 @@ def create_draft(settings: Settings, material_id: int) -> dict[str, Any]:
         raise KeyError(f"material {material_id} 不存在")
     if material["dqd_archive_id"]:
         return material
-    allowed_statuses = {"READY_TO_CREATE", "CREATE_ERROR", "AUTH_REQUIRED", "AUTH_EXPIRED"}
+    allowed_statuses = {"READY_TO_CREATE", "TAB_UNMAPPED", "CREATE_ERROR", "AUTH_REQUIRED", "AUTH_EXPIRED"}
     if material["status"] not in allowed_statuses:
         raise ValueError(f"当前状态为 {material['status_label']}，不能创建草稿")
     source_config = db.get_source(settings.db_path, material["source"])
@@ -144,11 +184,14 @@ def create_draft(settings: Settings, material_id: int) -> dict[str, Any]:
 
 def process_pending(settings: Settings, *, limit: int = 50, create: bool = False) -> list[dict[str, Any]]:
     rows = db.list_materials(settings.db_path, limit=limit)
-    candidates = [row for row in rows if row["status"] in {"RECEIVED", "CREATE_ERROR", "TAB_UNMAPPED"}]
+    candidate_statuses = {"RECEIVED", "CREATE_ERROR", "TAB_UNMAPPED"}
+    if create:
+        candidate_statuses |= {"READY_TO_CREATE", "AUTH_REQUIRED", "AUTH_EXPIRED"}
+    candidates = [row for row in rows if row["status"] in candidate_statuses]
     results = []
     for material in candidates[:limit]:
         try:
-            results.append(process_material(settings, material["id"], create=create))
+            results.append(_process_material_record(settings, material, create=create))
         except Exception as exc:
             results.append({"id": material["id"], "status": "ERROR", "error": str(exc)})
     return results

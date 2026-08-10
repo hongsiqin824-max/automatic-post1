@@ -10,7 +10,7 @@ from . import db
 from .config import Settings, get_settings
 from .dqd_client import build_draft_url
 from .open_platform import OpenPlatformClient, auth_record_summary
-from .pipeline import create_draft, process_material, process_pending, pull_materials
+from .pipeline import create_draft, process_material, process_material_ids, process_pending, pull_materials
 from .status import STATUS_LABELS
 
 
@@ -47,6 +47,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         return jsonify({
             "status_labels": STATUS_LABELS,
             "sources": db.list_sources(settings.db_path),
+            "pull_auto_process": settings.pull_auto_process,
             "material_api": {
                 "base_url": settings.material_api_base_url,
                 "caller": settings.material_api_caller,
@@ -195,8 +196,9 @@ def create_app(settings: Settings | None = None) -> Flask:
                 hours=payload.get("hours"),
                 limit=payload.get("limit"),
             )
-            if payload.get("process", settings.pull_auto_process):
-                result["processed"] = process_pending(settings, limit=int(payload.get("process_limit", 50)), create=False)
+            should_process = bool(payload.get("process", settings.pull_auto_process) or payload.get("create"))
+            if should_process:
+                result["processed"] = process_material_ids(settings, result.get("material_ids", []), create=bool(payload.get("create", False)))
             return jsonify(result)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
