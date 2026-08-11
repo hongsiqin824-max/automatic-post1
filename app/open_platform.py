@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import os
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -15,6 +17,9 @@ import requests
 from . import db
 from .config import Settings
 from .utils import now_iso
+
+_TOKEN_SERVICE_URL = os.getenv("TOKEN_SERVICE_URL", "").rstrip("/")
+logger = logging.getLogger(__name__)
 
 
 OPEN_AUTHORIZE_URL = "https://platform.dongqiudi.com/open/oauth/authorize"
@@ -323,6 +328,32 @@ class OpenPlatformClient:
         return token["access_token"]
 
     def ensure_access_token(self, *, force_refresh: bool = False) -> str:
+        # --- Token Service 集中模式 ---
+        token_service_url = _TOKEN_SERVICE_URL
+        if token_service_url:
+            params = "?force=1" if force_refresh else ""
+            try:
+                resp = self.session.get(
+                    f"{token_service_url}/token{params}",
+                    timeout=5,
+                )
+                payload = resp.json()
+                if resp.status_code == 200 and payload.get("ok"):
+                    return str(payload["access_token"])
+                if resp.status_code == 401:
+                    authorize_url = payload.get("authorize_url") or token_service_url
+                    raise OpenPlatformAuthError(
+                        f"Token Service 未授权，请访问 {token_service_url}/auth/start 重新授权",
+                        status="AUTH_REQUIRED",
+                        authorize_url=authorize_url,
+                    )
+                logger.warning("Token Service 返回错误 %s，降级到本地 DB: %s", resp.status_code, payload)
+            except OpenPlatformAuthError:
+                raise
+            except Exception as exc:
+                logger.warning("Token Service 不可达，降级到本地 DB: %s", exc)
+
+        # --- 本地 DB 模式（降级 / 未配置 TOKEN_SERVICE_URL 时使用）---
         record = db.get_open_platform_auth(self.settings.db_path)
         if record is None:
             raise OpenPlatformAuthError("尚未授权，请先完成开放平台登录", status="AUTH_REQUIRED", authorize_url=self.start_authorization()["authorize_url"])
